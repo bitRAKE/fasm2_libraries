@@ -93,22 +93,51 @@ quaternion, and projects:
 - `examples/pyramid.asm` -- a pyramid of 91 boxes, one draw call per body
   with the transform passed as uniforms (the simple path). SPACE detonates
   a `b3World_Explode` at the base, R rebuilds, ESC quits.
-- `examples/benchmark.asm` -- a multithreaded stress test: 10000 boxes with
-  randomized rotations collapse into a pile, with sleeping disabled for
-  sustained solver load. Box3D runs its own internal scheduler; the program
-  only sets `b3WorldDef.workerCount`. Keys 1-8 switch the worker count at
-  runtime via `b3World_SetWorkerCount`, and the title bar shows live
-  bodies/contacts/step-time/fps from `b3World_GetCounters` and
+- `examples/dismount.asm` -- artistic stair dismount. A ten-body ragdoll
+  (capsules and a sphere head, spherical joints with cone/twist limits at
+  the neck, shoulders, and hips, revolute joints with angle limits at the
+  elbows and knees) launches down a staircase and is judged on style:
+  flips, barrel rolls, and twists from integrating the torso angular
+  velocity, distinct steps contacted and wall touches from contact begin
+  events (each static shape tagged through its userData), and air time
+  from frames with no ragdoll-versus-static contact. Tall walls flank
+  both sides of the staircase; the camera-side wall is an invisible
+  collider so the view stays clear. It is a console application: aiming
+  feedback, judges' notes during the run (each new step, the first wall
+  contact), and a final scorecard with the per-category arithmetic all
+  print to the console, so the render window stays clean. Aim the launch angle,
+  power, spin, and sideways bank, then SPACE; the verdict freezes when the
+  ragdoll falls asleep or holds still for three seconds. Big-air clears,
+  full-staircase tumbles, and wall rides all score differently.
+- `examples/benchmark.asm` -- a multithreaded stress test: 49600 boxes
+  with randomized rotations collapse into a pile with sleeping enabled.
+  Box3D runs its own internal scheduler; the program only sets
+  `b3WorldDef.workerCount`. The + and - keys step the worker count up and
+  down at runtime via `b3World_SetWorkerCount`, and ] and [ raise and
+  lower the `b3World_Step` sub-step count (the solver's main
+  accuracy-versus-speed lever). The title bar shows live
+  bodies/awake/contacts/workers/substeps/step-time/fps from
+  `b3World_GetCounters`, `b3World_GetAwakeBodyCount`, and
   `b3World_GetProfile`.
 
   The benchmark renders with zero per-body API calls: each body's userData
-  holds its slot in a persistent instance buffer, one
-  `b3World_GetBodyEvents` call returns every moved body's transform in a
-  contiguous array, an SSE loop refreshes the touched slots, and the scene
-  draws with a single `glDrawArraysInstanced` after one buffer upload.
-  With the native+LTO library on the development machine the 10000-box
-  scene steps in ~32 ms on 1 worker and ~6.4 ms on 8 workers (60 fps),
-  including a full-scene explosion with every body awake.
+  holds its slot in a CPU instance array, one `b3World_GetBodyEvents` call
+  returns every moved body's transform in a contiguous array, and an SSE
+  loop refreshes the touched slots. The GPU side is a persistently and
+  coherently mapped GL 4.4 buffer (`glBufferStorage` +
+  `glMapBufferRange`), three regions deep with `glFenceSync` guarding
+  reuse; the CPU array is copied straight into the mapped region and the
+  scene draws with one `glDrawArraysInstancedBaseInstance` whose base
+  instance selects the region. No buffer respecification, no driver
+  staging copy.
+
+  With the native+LTO library on the development machine (32 logical
+  processors), the 49600-box collapse steps in ~39 ms at 16 workers
+  (~350k contacts, every body awake); 32 workers changes little, matching
+  Box3D's guidance that hyper-threads add nothing. Once the pile settles,
+  sleeping drops the awake count to zero and the step to ~0 ms at 60 fps
+  while the warm contacts remain; the explosion wakes all 49600 bodies in
+  one step.
 
 ## ABI notes
 

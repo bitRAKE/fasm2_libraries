@@ -9,7 +9,7 @@ format PE64 console 5.0
 entry start
 
 include 'macro/import64.inc'
-include '../box3d.inc'
+include 'box3d.inc'
 
 LOCALS = sizeof.b3WorldDef + sizeof.b3BodyDef + sizeof.b3ShapeDef \
        + sizeof.b3Sphere + sizeof.b3Pos + sizeof.b3Version
@@ -104,7 +104,7 @@ library box3d,'box3d.dll',\
         msvcrt,'msvcrt.dll',\
         kernel32,'KERNEL32.DLL'
 
-include '../box3d.api.inc'
+include 'box3d.api.inc'
 
 import msvcrt,\
        printf,'printf'

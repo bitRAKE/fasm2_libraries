@@ -754,6 +754,6 @@ section '.rdata' data readable
 	 wglDeleteContext,'wglDeleteContext',\
 	 wglMakeCurrent,'wglMakeCurrent'
 
-  include '../box3d.api.inc'
+  include 'box3d.api.inc'
 
   end data
