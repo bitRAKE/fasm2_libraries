@@ -1,21 +1,35 @@
 #!/usr/bin/env python3
-"""Generate a C program that emits fasmg `assert` lines for every struct,
-field, and integer constant declared in bindings/fasm2/box3d.inc.
+"""Generate C-backed fasmg layout assertions for the Box3D bindings.
 
-The C program is compiled against include/box3d, so the printed offsets and
-sizes are the C compiler's ground truth. Assembling test_layout.asm, which
-includes box3d.inc followed by the generated layout_check.inc, fails if the
-fasm2 bindings disagree with the C ABI in any offset, size, or constant.
-
-Usage: python gen_layout.py <box3d.inc> <out.c>
+The input is the distribution's fasm2 binding file, normally
+``box3d/include/box3d.inc``. This script writes a small C program that is
+compiled against ``box3d/include/box3d/*.h`` so the printed offsets, sizes,
+and integer constants come from the C compiler's ground truth. Assembling
+``test_layout.asm`` after it includes the generated ``layout_check.inc`` then
+fails if the fasm2 bindings disagree with the C ABI.
 """
 
+from __future__ import annotations
+
+import argparse
 import re
 import sys
+from pathlib import Path
 
 
-def main() -> None:
-    inc_path, out_path = sys.argv[1], sys.argv[2]
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="generate a C program that emits fasmg layout asserts"
+    )
+    parser.add_argument("inc_path", type=Path, help="path to box3d.inc")
+    parser.add_argument("out_path", type=Path, help="C file to write")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    inc_path = args.inc_path
+    out_path = args.out_path
 
     structs = []  # (struct_name, [field, ...])
     consts = []   # constant names
@@ -78,7 +92,8 @@ def main() -> None:
 
     total = sum(len(f) for _, f in structs)
     print(f"{len(structs)} structs, {total} fields, {len(consts)} constants")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
