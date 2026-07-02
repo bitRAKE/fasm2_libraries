@@ -31,13 +31,8 @@ GL_STATIC_DRAW		:= 0x88E4
 GL_VERTEX_SHADER	:= 0x8B31
 GL_FRAGMENT_SHADER	:= 0x8B30
 
-PYRAMID_LEVELS		:= 11
-
-max_bodies = 0
-repeat PYRAMID_LEVELS
-	max_bodies = max_bodies + %*%
-end repeat
-MAX_BODIES := max_bodies
+PYRAMID_LEVELS := 11
+MAX_BODIES := (PYRAMID_LEVELS*(PYRAMID_LEVELS+1)*(2*PYRAMID_LEVELS+1))/6
 
 iterate name,\
 	glCreateShader,\
