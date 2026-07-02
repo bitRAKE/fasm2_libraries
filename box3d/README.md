@@ -50,8 +50,8 @@ library box3d,'box3d.dll'
 include 'box3d.api.inc'
 ```
 
-See `examples/drop_coff.asm` and `examples/drop_pe.asm` for complete,
-runnable programs (a sphere in free fall).
+See `drop_coff.asm` and `drop_pe.asm` for complete, runnable programs
+(a sphere in free fall).
 
 ## ABI notes
 
