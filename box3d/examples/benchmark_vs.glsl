@@ -23,8 +23,8 @@ void main()
     vec3 world = iPos + rotate(iQuat, aPos * iHalf);
 
     // fixed camera looking at the stack
-    vec3 eye = vec3(46.0, 32.0, 54.0);
-    vec3 target = vec3(0.0, 6.0, 0.0);
+    vec3 eye = vec3(85.0, 55.0, 100.0);
+    vec3 target = vec3(0.0, 8.0, 0.0);
     vec3 f = normalize(target - eye);
     vec3 r = normalize(cross(f, vec3(0.0, 1.0, 0.0)));
     vec3 u = cross(r, f);
@@ -37,7 +37,7 @@ void main()
     vColor = iColor * light;
 
     float fl = 1.7;                 // focal length
-    float zn = 0.1, zf = 400.0;
+    float zn = 0.1, zf = 600.0;
     gl_Position = vec4(v.x * fl / uAspect, v.y * fl,
                        (v.z * (zf + zn) - 2.0 * zf * zn) / (zf - zn), v.z);
 }

@@ -2,7 +2,8 @@
 ;
 ;   fasm2 dismount.asm
 ;
-; Run with box3d.dll (build-shared\bin\Release) next to the executable.
+; Run with box3d.dll (from the distribution's shared directory) next to
+; the executable.
 ; A jointed ragdoll stands at the top of a staircase. Aim a launch impulse
 ; and get judged on style, not damage:
 ;   flips   end-over-end rotation (about the lateral axis)

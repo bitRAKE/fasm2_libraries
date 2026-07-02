@@ -2,7 +2,8 @@
 ;
 ;   fasm2 pyramid.asm
 ;
-; Run with box3d.dll (build-shared\bin\Release) next to the executable.
+; Run with box3d.dll (from the distribution's shared directory) next to
+; the executable.
 ;   SPACE  detonate an explosion at the base of the pyramid
 ;   R      rebuild the pyramid
 ;   ESC    quit

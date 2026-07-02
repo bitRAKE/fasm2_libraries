@@ -1,24 +1,35 @@
-; Box3D fasm2 example: multithreaded stress test, 10000 boxes.
+; Box3D fasm2 example: multithreaded stress test, 49600 boxes.
 ;
 ;   fasm2 benchmark.asm
 ;
-; Run with box3d.dll (build-shared\bin\Release) next to the executable.
-; 10000 boxes rain into a pile. Box3D runs its own internal scheduler on
-; worker threads; this program only sets b3WorldDef.workerCount.
-;   1..8   set the solver worker count (watch the step time change)
-;   SPACE  detonate an explosion under the pile
+; Run with box3d.dll (from the distribution's shared directory) next to
+; the executable.
+; 49600 boxes rain into a pile with sleeping enabled, so settled islands
+; drop out of the solver and the awake count in the title bar falls as the
+; pile calms down. Box3D runs its own internal scheduler on worker
+; threads; this program only sets b3WorldDef.workerCount.
+;   + / -  raise or lower the solver worker count (watch the step time)
+;   ] / [  raise or lower the sub-step count (solver accuracy vs speed)
+;   SPACE  detonate an explosion under the pile (wakes everything)
 ;   R      rebuild the scene
 ;   ESC    quit
-; The title bar shows live counters: bodies, touching contacts, workers,
-; physics step time from b3World_GetProfile, and frames per second.
+; The title bar shows live counters: bodies, awake bodies, touching
+; contacts, workers, physics step time from b3World_GetProfile, and
+; frames per second.
 ;
 ; Rendering is fully instanced so the draw cost stays flat as the body
-; count grows. Each body's userData holds its slot in a persistent
-; instance buffer (position, quaternion, half extents, color). After each
-; step, one b3World_GetBodyEvents call returns every moved body with its
-; new transform in a contiguous array; a tight copy loop refreshes the
-; touched slots, the buffer is streamed to the GPU once, and a single
-; glDrawArraysInstanced draws the whole scene. No per-body API calls.
+; count grows. Each body's userData holds its slot in a CPU instance
+; array (position, quaternion, half extents, color). After each step, one
+; b3World_GetBodyEvents call returns every moved body with its new
+; transform in a contiguous array and a tight copy loop refreshes the
+; touched slots. No per-body API calls.
+;
+; The GPU side uses a persistently mapped buffer (GL 4.4 buffer storage,
+; coherent write mapping): the CPU array is copied straight into one of
+; three regions of GPU-visible memory, with glFenceSync guarding region
+; reuse, and the scene draws with a single instanced call whose base
+; instance selects the region. No glBufferData respecification, no driver
+; staging copy.
 ;
 ; Window and OpenGL setup follow fasm2's examples/opengl/opengl.asm.
 
@@ -37,18 +48,32 @@ GL_DEPTH_TEST		:= 0x0B71
 GL_TRIANGLES		:= 0x0004
 GL_FLOAT		:= 0x1406
 GL_ARRAY_BUFFER 	:= 0x8892
-GL_STREAM_DRAW		:= 0x88E0
 GL_STATIC_DRAW		:= 0x88E4
 GL_VERTEX_SHADER	:= 0x8B31
 GL_FRAGMENT_SHADER	:= 0x8B30
+GL_MAP_WRITE_BIT	:= 0x0002
+GL_MAP_PERSISTENT_BIT	:= 0x0040
+GL_MAP_COHERENT_BIT	:= 0x0080
+GL_SYNC_GPU_COMMANDS_COMPLETE := 0x9117
+GL_SYNC_FLUSH_COMMANDS_BIT := 0x00000001
 
-GRID			:= 20		; boxes per side in each layer
-LAYERS			:= 25		; layers in the spawn grid
+; VK_ADD and VK_SUBTRACT (numpad) come from the win64a equates
+VK_OEM_PLUS		:= 0xBB 	; '=' / '+' main row
+VK_OEM_MINUS		:= 0xBD 	; '-' main row
+VK_OEM_4		:= 0xDB 	; '['
+VK_OEM_6		:= 0xDD 	; ']'
+
+MAX_SUBSTEPS		:= 16
+
+GRID			:= 40		; boxes per side in each layer
+LAYERS			:= 31		; layers in the spawn grid
 MAX_BODIES		:= GRID*GRID*LAYERS
 
 ; instance record: pos vec3, quat vec4, half vec3, color vec3
 INST_SIZE		:= 52
 MAX_INSTANCES		:= MAX_BODIES + 1	; instance 0 is the ground slab
+REGION_SIZE		:= MAX_INSTANCES*INST_SIZE
+REGION_COUNT		:= 3
 
 iterate name,\
 	glCreateShader,\
@@ -66,7 +91,12 @@ iterate name,\
 	glVertexAttribPointer,\
 	glEnableVertexAttribArray,\
 	glVertexAttribDivisor,\
-	glDrawArraysInstanced,\
+	glBufferStorage,\
+	glMapBufferRange,\
+	glFenceSync,\
+	glClientWaitSync,\
+	glDeleteSync,\
+	glDrawArraysInstancedBaseInstance,\
 	glUseProgram,\
 	glGetUniformLocation,\
 	glUniform1f
@@ -89,9 +119,9 @@ section '.data' data readable writeable
 
   wc WNDCLASS style:0, lpfnWndProc:WindowProc, lpszClassName:_class
 
-  attribs:
-	dd WGL_CONTEXT_MAJOR_VERSION_ARB, 3
-	dd WGL_CONTEXT_MINOR_VERSION_ARB, 3
+  attribs:	; persistent buffer mapping needs GL 4.4 buffer storage
+	dd WGL_CONTEXT_MAJOR_VERSION_ARB, 4
+	dd WGL_CONTEXT_MINOR_VERSION_ARB, 4
 	dd 0
 
   cube_vertices:
@@ -148,8 +178,18 @@ section '.data' data readable writeable
   instCount dd ?
   world dd ?			; b3WorldId; null while index1 (low word) is zero
   workers dd ?
+  maxWorkers dd ?
+  subSteps dd 4			; recommended default
   rngSeed dd 0x12345678
   layerY dd ?
+
+  ; persistent mapping ring
+  align 8
+  instPtr dq ?			; persistently mapped GPU pointer
+  fences dq REGION_COUNT dup 0
+  frameIndex dd 0
+  curRegion dd ?
+  baseInst dd ?
 
   ; HUD state
   frames dd ?
@@ -157,6 +197,7 @@ section '.data' data readable writeable
   fpsTick dd ?
   msInt dd ?
   msFrac dd ?
+  awake dd ?
   titleBuf rb 256
 
   ; persistent instance buffer, refreshed in place from move events
@@ -174,17 +215,23 @@ section '.text' code readable executable
 	invoke	LoadCursor,0,IDC_ARROW
 	mov	[wc.hCursor],rax
 
-	; default worker count: half the logical processors, clamped to [1,8]
+	; worker limits: key 0 uses every logical processor (capped to Box3D's
+	; B3_MAX_WORKERS); the startup default is half of that
 	invoke	GetSystemInfo,addr sysinfo
 	mov	eax,[sysinfo.dwNumberOfProcessors]
-	shr	eax,1
 	test	eax,eax
 	jnz	@f
 	mov	eax,1
     @@:
-	cmp	eax,8
+	cmp	eax,B3_MAX_WORKERS
 	jbe	@f
-	mov	eax,8
+	mov	eax,B3_MAX_WORKERS
+    @@:
+	mov	[maxWorkers],eax
+	shr	eax,1
+	test	eax,eax
+	jnz	@f
+	mov	eax,1
     @@:
 	mov	[workers],eax
 
@@ -304,10 +351,17 @@ proc WindowProc uses rbx rsi rdi, hwnd,wmsg,wparam,lparam
 	invoke	glVertexAttribPointer,1,3,GL_FLOAT,0,24,12	; normal
 	invoke	glEnableVertexAttribArray,1
 
-	; per-instance body data, streamed once per frame
+	; per-instance body data: immutable storage, persistently and
+	; coherently mapped for the life of the program, three regions deep
 	invoke	glGenBuffers,1,addr vboInst
 	invoke	glBindBuffer,GL_ARRAY_BUFFER,[vboInst]
-	invoke	glBufferData,GL_ARRAY_BUFFER,MAX_INSTANCES*INST_SIZE,0,GL_STREAM_DRAW
+	invoke	glBufferStorage,GL_ARRAY_BUFFER,REGION_COUNT*REGION_SIZE,0,\
+			GL_MAP_WRITE_BIT+GL_MAP_PERSISTENT_BIT+GL_MAP_COHERENT_BIT
+	invoke	glMapBufferRange,GL_ARRAY_BUFFER,0,REGION_COUNT*REGION_SIZE,\
+			GL_MAP_WRITE_BIT+GL_MAP_PERSISTENT_BIT+GL_MAP_COHERENT_BIT
+	test	rax,rax
+	jz	map_failed
+	mov	[instPtr],rax
 
 	invoke	glVertexAttribPointer,2,3,GL_FLOAT,0,INST_SIZE,0	; iPos
 	invoke	glEnableVertexAttribArray,2
@@ -346,7 +400,7 @@ proc WindowProc uses rbx rsi rdi, hwnd,wmsg,wparam,lparam
 	jb	finish
 	mov	[clock],rax
 
-	invoke	b3World_Step,[world],float dword [timeStep],4
+	invoke	b3World_Step,[world],float dword [timeStep],[subSteps]
 
 	; refresh the instance slots of every body that moved: one API call,
 	; then a contiguous copy loop (the move event transform layout matches
@@ -368,10 +422,32 @@ proc WindowProc uses rbx rsi rdi, hwnd,wmsg,wparam,lparam
 	dec	ebx
 	jnz	.move
   .upload:
-	invoke	glBindBuffer,GL_ARRAY_BUFFER,[vboInst]
-	mov	eax,[instCount]
-	imul	eax,eax,INST_SIZE
-	invoke	glBufferData,GL_ARRAY_BUFFER,eax,addr instbuf,GL_STREAM_DRAW
+	; pick the next mapped region; wait on its fence so the GPU is done
+	; reading it from three frames ago before writing over it
+	mov	eax,[frameIndex]
+	xor	edx,edx
+	mov	ecx,REGION_COUNT
+	div	ecx
+	mov	[curRegion],edx
+	mov	eax,edx
+	cmp	qword [fences+rax*8],0
+	je	.no_fence
+	invoke	glClientWaitSync,qword [fences+rax*8],GL_SYNC_FLUSH_COMMANDS_BIT,100000000
+	mov	eax,[curRegion]
+	invoke	glDeleteSync,qword [fences+rax*8]
+	mov	eax,[curRegion]
+	mov	qword [fences+rax*8],0
+  .no_fence:
+	; copy the CPU instance array straight into GPU-visible memory; the
+	; coherent mapping needs no flush
+	mov	eax,[curRegion]
+	imul	rax,rax,REGION_SIZE
+	mov	rdi,[instPtr]
+	add	rdi,rax
+	lea	rsi,[instbuf]
+	mov	ecx,[instCount]
+	imul	ecx,ecx,INST_SIZE
+	rep	movsb
 
 	; update the title bar counters once per second
 	inc	dword [frames]
@@ -389,6 +465,8 @@ proc WindowProc uses rbx rsi rdi, hwnd,wmsg,wparam,lparam
 	mov	[fpsTick],eax
 	mov	dword [frames],0
 	invoke	b3World_GetCounters,addr counters,[world]
+	invoke	b3World_GetAwakeBodyCount,[world]
+	mov	[awake],eax
 	invoke	b3World_GetProfile,addr prof,[world]
 	movss	xmm0,[prof.step]
 	mulss	xmm0,[cHundred]
@@ -398,14 +476,22 @@ proc WindowProc uses rbx rsi rdi, hwnd,wmsg,wparam,lparam
 	idiv	ecx
 	mov	[msInt],eax
 	mov	[msFrac],edx
-	invoke	wsprintf,addr titleBuf,addr _fmt,[counters.bodyCount],[counters.contactCount],[workers],[msInt],[msFrac],[fps]
+	invoke	wsprintf,addr titleBuf,addr _fmt,[counters.bodyCount],[awake],[counters.contactCount],[workers],[subSteps],[msInt],[msFrac],[fps]
 	invoke	SetWindowText,[hwnd],addr titleBuf
   .no_hud:
 
 	invoke	glClearColor,float dword 0.07,float dword 0.08,float dword 0.11,float dword 1.0
 	invoke	glClear,GL_COLOR_BUFFER_BIT+GL_DEPTH_BUFFER_BIT
 
-	invoke	glDrawArraysInstanced,GL_TRIANGLES,0,36,[instCount]
+	; the base instance selects the ring region; fence it for reuse
+	mov	eax,[curRegion]
+	imul	eax,eax,MAX_INSTANCES
+	mov	[baseInst],eax
+	invoke	glDrawArraysInstancedBaseInstance,GL_TRIANGLES,0,36,[instCount],[baseInst]
+	invoke	glFenceSync,GL_SYNC_GPU_COMMANDS_COMPLETE,0
+	mov	ecx,[curRegion]
+	mov	[fences+rcx*8],rax
+	inc	dword [frameIndex]
 
 	invoke	SwapBuffers,[hdc]
 	xor	eax,eax
@@ -417,13 +503,44 @@ proc WindowProc uses rbx rsi rdi, hwnd,wmsg,wparam,lparam
 	je	explode
 	cmp	r8d,'R'
 	je	.rebuild
-	cmp	r8d,'1'
-	jb	defwndproc
-	cmp	r8d,'8'
-	ja	defwndproc
-	lea	ecx,[r8d-'0']
+	cmp	r8d,VK_OEM_PLUS
+	je	.more_workers
+	cmp	r8d,VK_ADD
+	je	.more_workers
+	cmp	r8d,VK_OEM_MINUS
+	je	.fewer_workers
+	cmp	r8d,VK_SUBTRACT
+	je	.fewer_workers
+	cmp	r8d,VK_OEM_6
+	je	.more_substeps
+	cmp	r8d,VK_OEM_4
+	je	.fewer_substeps
+	jmp	defwndproc
+  .more_workers:
+	mov	ecx,[workers]
+	cmp	ecx,[maxWorkers]
+	jae	.done_key
+	inc	ecx
+	jmp	.set_workers
+  .fewer_workers:
+	mov	ecx,[workers]
+	cmp	ecx,1
+	jbe	.done_key
+	dec	ecx
+  .set_workers:
 	mov	[workers],ecx
 	invoke	b3World_SetWorkerCount,[world],[workers]
+	jmp	.done_key
+  .more_substeps:
+	cmp	dword [subSteps],MAX_SUBSTEPS
+	jae	.done_key
+	inc	dword [subSteps]
+	jmp	.done_key
+  .fewer_substeps:
+	cmp	dword [subSteps],1
+	jbe	.done_key
+	dec	dword [subSteps]
+  .done_key:
 	xor	eax,eax
 	jmp	finish
   .rebuild:
@@ -466,6 +583,9 @@ proc WindowProc uses rbx rsi rdi, hwnd,wmsg,wparam,lparam
   context_not_created:
 	invoke	MessageBox,[hwnd],_context_not_created,NULL,MB_ICONERROR+MB_OK
 	jmp	exit
+  map_failed:
+	invoke	MessageBox,[hwnd],_map_failed,NULL,MB_ICONERROR+MB_OK
+	jmp	exit
 
 endp
 
@@ -504,7 +624,8 @@ proc build_world uses rbx rsi rdi
 	invoke	b3DefaultWorldDef,addr wdef	; returned via hidden pointer
 	mov	eax,[workers]
 	mov	[wdef.workerCount],eax		; Box3D spawns its own scheduler threads
-	mov	byte [wdef.enableSleep],0	; keep every body active: sustained load
+	; sleeping stays enabled: settled islands leave the solver and the
+	; move-event stream, and the awake counter in the HUD tracks it
 	invoke	b3CreateWorld,addr wdef
 	mov	[world],eax
 
@@ -654,10 +775,11 @@ section '.rdata' data readable
 
   _class db 'BOX3DBENCH',0
 
-  _fmt db 'Box3D fasm2 bench  bodies=%d contacts=%d workers=%d step=%d.%02dms fps=%d  [1-8: workers, SPACE: explode, R: reset]',0
+  _fmt db 'Box3D fasm2 bench  bodies=%d awake=%d contacts=%d workers=%d sub=%d step=%d.%02dms fps=%d  [+/-: workers, [/]: substeps, SPACE: explode, R: reset]',0
 
   _function_not_supported db 'Function not supported.',0
-  _context_not_created db 'Failed to create OpenGL context.',0
+  _context_not_created db 'Failed to create OpenGL 4.4 context.',0
+  _map_failed db 'Failed to map the instance buffer.',0
 
   _wglCreateContextAttribsARB db 'wglCreateContextAttribsARB',0
 
@@ -676,7 +798,7 @@ section '.rdata' data readable
   timeStep	dd 1.0/60.0
   cHalf 	dd 0.5
   cMinusHalf	dd -0.5
-  cGroundHX	dd 60.0
+  cGroundHX	dd 100.0
   cSpacing	dd 1.1		; grid pitch of the spawn columns
   cGridHalfSpan dd (GRID-1)*1.1/2
   cBaseY	dd 0.6		; first layer floats just above the ground
@@ -688,9 +810,9 @@ section '.rdata' data readable
 
   ; default shape density is 1000 kg/m^3, so each cube weighs a tonne;
   ; the impulse has to be sized accordingly
-  cExpHeight	dd 2.0
-  cExpRadius	dd 20.0
-  cExpFalloff	dd 10.0
+  cExpHeight	dd 3.0
+  cExpRadius	dd 35.0
+  cExpFalloff	dd 18.0
   cExpImpulse	dd 8000.0
 
   groundColor	dd 0.33, 0.35, 0.38

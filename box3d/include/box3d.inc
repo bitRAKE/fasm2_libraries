@@ -1,4 +1,5 @@
 ; Box3D C API for fasm2
+; SPDX-FileCopyrightText: 2026 Erin Catto (Box3D)
 ; SPDX-License-Identifier: MIT
 ;
 ; Mirrors the public C interface in include/box3d for the default build:
