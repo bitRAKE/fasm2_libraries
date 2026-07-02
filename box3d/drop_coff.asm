@@ -10,8 +10,8 @@
 
 format MS64 COFF
 
-include 'box3d.inc'
-include 'box3d.extrn.inc'
+include 'include/box3d.inc'
+include 'include/box3d.extrn.inc'
 
 public main
 extrn printf

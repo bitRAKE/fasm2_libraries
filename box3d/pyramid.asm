@@ -16,7 +16,7 @@ format PE64 NX GUI 5.0
 entry start
 
 include 'win64a.inc'
-include 'box3d.inc'
+include 'include/box3d.inc'
 
 WGL_CONTEXT_MAJOR_VERSION_ARB	:= 0x2091
 WGL_CONTEXT_MINOR_VERSION_ARB	:= 0x2092
@@ -558,6 +558,6 @@ section '.rdata' data readable
 	 wglDeleteContext,'wglDeleteContext',\
 	 wglMakeCurrent,'wglMakeCurrent'
 
-  include '../box3d.api.inc'
+  include 'include/box3d.api.inc'
 
   end data

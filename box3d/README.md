@@ -5,9 +5,9 @@ single precision (no `BOX3D_DOUBLE_PRECISION`), Windows x64, MSVC layout.
 
 | File | Purpose |
 | --- | --- |
-| `box3d.inc` | Constants, enums, and all public struct layouts (`struct`/`sizeof.`/field offsets). Requires fasm2's `macro/struct.inc`, which it includes itself. |
-| `box3d.extrn.inc` | `extrn` declarations for all 578 `B3_API` functions, for `format MS64 COFF` objects linked against `box3d.lib` (static) or the `box3d.dll` import library. Only symbols you use are declared. |
-| `box3d.api.inc` | Import list for `format PE64` executables importing `box3d.dll` directly with `macro/import64.inc` (no linker needed). Only symbols you use are imported. |
+| `include/box3d.inc` | Constants, enums, and all public struct layouts (`struct`/`sizeof.`/field offsets). Requires fasm2's `macro/struct.inc`, which it includes itself. |
+| `include/box3d.extrn.inc` | `extrn` declarations for all 578 `B3_API` functions, for `format MS64 COFF` objects linked against `box3d.lib` (static) or the `box3d.dll` import library. Only symbols you use are declared. |
+| `include/box3d.api.inc` | Import list for `format PE64` executables importing `box3d.dll` directly with `macro/import64.inc` (no linker needed). Only symbols you use are imported. |
 
 ## Building the libraries
 
@@ -30,8 +30,8 @@ import library):
 
 ```asm
 format MS64 COFF
-include 'box3d.inc'
-include 'box3d.extrn.inc'
+include 'include/box3d.inc'
+include 'include/box3d.extrn.inc'
 ...
 call    b3CreateWorld
 ```
@@ -41,17 +41,17 @@ PE64 executable importing `box3d.dll` directly, no linker:
 ```asm
 format PE64 console
 include 'macro/import64.inc'
-include 'box3d.inc'
+include 'include/box3d.inc'
 ...
 call    [b3CreateWorld]           ; imported functions are called indirectly
 
 section '.idata' import data readable
 library box3d,'box3d.dll'
-include 'box3d.api.inc'
+include 'include/box3d.api.inc'
 ```
 
-See `examples/drop_coff.asm` and `examples/drop_pe.asm` for complete,
-runnable programs (a sphere in free fall).
+See `drop_coff.asm` and `drop_pe.asm` for complete, runnable programs
+(a sphere in free fall).
 
 ## ABI notes
 
@@ -86,7 +86,7 @@ gen_layout.exe > layout_check.inc
 fasm2 test_layout.asm
 ```
 
-`gen_layout.py` parses `box3d.inc`, emits a C program that prints one fasmg
+`gen_layout.py` parses `include/box3d.inc`, emits a C program that prints one fasmg
 `assert` line per struct/field/constant using `sizeof`/`offsetof`, and
 `test_layout.asm` assembles the bindings against that output. Any mismatch
 fails assembly. Re-run this after pulling upstream header changes.
