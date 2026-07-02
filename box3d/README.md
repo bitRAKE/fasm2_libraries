@@ -72,24 +72,3 @@ runnable programs (a sphere in free fall).
   with the `label name: type` idiom instead of a data definition:
   `b3CollisionPlane.push`, `b3MeshNode.data`, `b3Mesh.data`. Their offsets
   are unchanged; they are just not initializable in a struct literal.
-
-## Layout verification
-
-`test/` machine-checks every struct size, field offset, and integer constant
-in `box3d.inc` against the C compiler:
-
-```bat
-cd bindings\fasm2\test
-python gen_layout.py ..\box3d.inc gen_layout.c
-cl /nologo /I..\..\..\include gen_layout.c
-gen_layout.exe > layout_check.inc
-fasm2 test_layout.asm
-```
-
-`gen_layout.py` parses `box3d.inc`, emits a C program that prints one fasmg
-`assert` line per struct/field/constant using `sizeof`/`offsetof`, and
-`test_layout.asm` assembles the bindings against that output. Any mismatch
-fails assembly. Re-run this after pulling upstream header changes.
-
-`test\run_tests.cmd` runs the layout check and builds and runs both examples
-against the static library, the import library, and by direct DLL import.
