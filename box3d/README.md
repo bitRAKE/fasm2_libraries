@@ -140,7 +140,9 @@ named by `FASM2`, and python available) prefers `lld-link` when present
    The per-phase hashes must match bit for bit; the asm side reproduces
    130 simulation steps of the C reference exactly.
 3. **Examples**: the drop program is linked against the static library
-   and the import library and run alongside the direct-import PE.
+   and the import library and run alongside the direct-import PE. When
+   `shared\box3d-Oz.dll` is present, the ABI hash is also checked against
+   the size-optimized DLL before the examples run.
 
 One C-side subtlety the harness works around: structs returned by value
 carry indeterminate padding bytes (a `{0}` initializer need not zero
