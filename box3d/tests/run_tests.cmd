@@ -35,6 +35,15 @@ fc api_c.txt api_asm.txt >nul || (echo ABI conformance FAILED: hashes diverge & 
 type api_asm.txt
 echo ABI conformance passed: asm output matches the C reference bit for bit
 
+if exist "%DIST%\shared\box3d-Oz.dll" (
+    echo === ABI conformance: size-optimized DLL ===
+    copy /y "%DIST%\shared\box3d-Oz.dll" .\box3d.dll >nul || exit /b 1
+    .\api_check_asm.exe > api_oz.txt || exit /b 1
+    fc api_asm.txt api_oz.txt >nul || (echo ABI conformance FAILED: size-optimized DLL hash diverges & exit /b 1)
+    type api_oz.txt
+    echo ABI conformance passed: size-optimized DLL matches the default DLL bit for bit
+)
+
 echo === examples ===
 cd /d "%DIST%\examples"
 call %FASM2% drop_coff.asm || exit /b 1
